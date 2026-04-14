@@ -24,8 +24,9 @@ const Dashboard = () => {
                 const data = snapshot.val();
                 const formattedSlots = Object.keys(data).map(key => ({
                     id: key,
-                    status: ['A3', 'A4', 'A5'].includes(key) ? 'out_of_service' : data[key].status,
+                    status: data[key].status,
                     isReserved: Boolean(data[key].isReserved),
+                    isActive: data[key].isActive !== false,
                     lastlog: data[key].lastlog,
                     reservedUntil: data[key].reservedUntil
                 }));
@@ -65,7 +66,7 @@ const Dashboard = () => {
         };
     }, []);
 
-    const activeSlots = slots.filter(s => s.status !== 'out_of_service');
+    const activeSlots = slots.filter(s => s.isActive);
     const freeSlots = activeSlots.filter(s => s.status === 'free' && !s.isReserved).length;
     const reservedSlots = activeSlots.filter(s => s.status === 'free' && s.isReserved).length;
     const occupiedSlots = activeSlots.filter(s => s.status === 'occupied').length;
@@ -258,7 +259,7 @@ const Dashboard = () => {
                         {slots.map(slot => {
                             const isFree = slot.status === 'free';
                             const isReserved = isFree && slot.isReserved;
-                            const isOutOfService = slot.status === 'out_of_service';
+                            const isOutOfService = !slot.isActive;
 
                             let glowClass = 'status-glow-occupied';
                             let borderClass = 'bg-surface-container-high/60 border-error/20 shadow-[0_8px_30px_rgb(0,0,0,0.12)]';
@@ -461,14 +462,14 @@ const Dashboard = () => {
                                 <label className="font-label text-[10px] uppercase text-on-surface-variant mb-1 block">Date</label>
                                 <div className="bg-surface-container-lowest rounded-lg p-3 flex items-center border border-outline-variant/10 focus-within:border-primary-container/40 transition-all">
                                     <span className="material-symbols-outlined text-primary-container text-lg mr-2">event</span>
-                                    <input name="date" defaultValue={new Date().toLocaleDateString('en-CA')} required className="bg-transparent border-none text-sm text-on-surface-variant w-full focus:ring-0 p-0 font-label outline-none" type="date" />
+                                    <input name="date" defaultValue={new Date().toLocaleDateString('en-CA')} required className="bg-transparent border-none text-sm text-on-surface-variant w-full focus:ring-0 p-0 font-label outline-none cursor-pointer" type="date" onClick={(e) => "showPicker" in e.currentTarget && (e.currentTarget as any).showPicker()} />
                                 </div>
                             </div>
                             <div>
                                 <label className="font-label text-[10px] uppercase text-on-surface-variant mb-1 block">Time</label>
                                 <div className="bg-surface-container-lowest rounded-lg p-3 flex items-center border border-outline-variant/10 focus-within:border-primary-container/40 transition-all">
                                     <span className="material-symbols-outlined text-primary-container text-lg mr-2">schedule</span>
-                                    <input name="time" defaultValue={new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })} required className="bg-transparent border-none text-sm text-on-surface-variant w-full focus:ring-0 p-0 font-label outline-none" type="time" />
+                                    <input name="time" defaultValue={new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })} required className="bg-transparent border-none text-sm text-on-surface-variant w-full focus:ring-0 p-0 font-label outline-none cursor-pointer" type="time" onClick={(e) => "showPicker" in e.currentTarget && (e.currentTarget as any).showPicker()} />
                                 </div>
                             </div>
                         </div>

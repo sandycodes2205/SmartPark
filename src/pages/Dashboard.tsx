@@ -1,6 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { db } from '../firebase';
-import { ref, onValue, update, push } from 'firebase/database';
+import { ref, onValue, update, push, get } from 'firebase/database';
 
 const Dashboard = () => {
     const [slots, setSlots] = useState<any[]>([
@@ -13,6 +13,57 @@ const Dashboard = () => {
     const [logs, setLogs] = useState<any[]>([]);
     const [isOnline, setIsOnline] = useState(false);
     const [lastUpdated, setLastUpdated] = useState("--:--:--");
+    const [reservationError, setReservationError] = useState<string | null>(null);
+    const [selectedHour, setSelectedHour] = useState(new Date().getHours());
+    const [selectedMinute, setSelectedMinute] = useState(Math.ceil(new Date().getMinutes() / 5) * 5 % 60);
+    const [showTimePicker, setShowTimePicker] = useState(false);
+    const timePickerRef = useRef<HTMLDivElement>(null);
+    const hourWheelRef = useRef<HTMLDivElement>(null);
+    const minWheelRef = useRef<HTMLDivElement>(null);
+    const [showDatePicker, setShowDatePicker] = useState(false);
+    const datePickerRef = useRef<HTMLDivElement>(null);
+    const today = new Date();
+    const [selectedDate, setSelectedDate] = useState(new Date(today));
+    const [calViewYear, setCalViewYear] = useState(today.getFullYear());
+    const [calViewMonth, setCalViewMonth] = useState(today.getMonth());
+
+    useEffect(() => {
+        const handleClickOutside = (e: MouseEvent) => {
+            if (timePickerRef.current && !timePickerRef.current.contains(e.target as Node)) {
+                setShowTimePicker(false);
+            }
+            if (datePickerRef.current && !datePickerRef.current.contains(e.target as Node)) {
+                setShowDatePicker(false);
+            }
+        };
+        document.addEventListener('mousedown', handleClickOutside);
+        return () => document.removeEventListener('mousedown', handleClickOutside);
+    }, []);
+
+    // Non-passive wheel listeners to suppress page scroll inside drum wheels
+    useEffect(() => {
+        const MINUTES = [0,5,10,15,20,25,30,35,40,45,50,55];
+        const prevent = (e: WheelEvent) => {
+            e.preventDefault();
+            const dir = e.deltaY > 0 ? 1 : -1;
+            if ((e.currentTarget as HTMLElement) === hourWheelRef.current) {
+                setSelectedHour(h => (h + dir + 24) % 24);
+            } else {
+                setSelectedMinute(m => {
+                    const idx = MINUTES.indexOf(m);
+                    return MINUTES[(idx + dir + MINUTES.length) % MINUTES.length];
+                });
+            }
+        };
+        const hEl = hourWheelRef.current;
+        const mEl = minWheelRef.current;
+        hEl?.addEventListener('wheel', prevent, { passive: false });
+        mEl?.addEventListener('wheel', prevent, { passive: false });
+        return () => {
+            hEl?.removeEventListener('wheel', prevent);
+            mEl?.removeEventListener('wheel', prevent);
+        };
+    }, [showTimePicker]);
 
     useEffect(() => {
         const slotsRef = ref(db, 'slots');
@@ -41,7 +92,7 @@ const Dashboard = () => {
                 setIsOnline(Boolean(data.isOnline));
                 if (data.lastUpdated) {
                     const date = new Date(data.lastUpdated);
-                    setLastUpdated(date.toLocaleTimeString());
+                    setLastUpdated(date.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }));
                 }
             } else {
                 setIsOnline(false);
@@ -64,6 +115,46 @@ const Dashboard = () => {
             unsubscribeSystem();
             unsubscribeLogs();
         };
+    }, []);
+
+
+
+
+    // 3-second polling — catches external reservation changes and expiry without relying on IoT push
+    useEffect(() => {
+        const poll = async () => {
+            try {
+                const [slotsSnap, systemSnap, logsSnap] = await Promise.all([
+                    get(ref(db, 'slots')),
+                    get(ref(db, 'system')),
+                    get(ref(db, 'logs')),
+                ]);
+                if (slotsSnap.exists()) {
+                    const data = slotsSnap.val();
+                    setSlots(Object.keys(data).map(key => ({
+                        id: key,
+                        status: data[key].status,
+                        isReserved: Boolean(data[key].isReserved),
+                        isActive: data[key].isActive !== false,
+                        lastlog: data[key].lastlog,
+                        reservedUntil: data[key].reservedUntil || null,
+                    })));
+                }
+                if (systemSnap.exists()) {
+                    const data = systemSnap.val();
+                    setIsOnline(Boolean(data.isOnline));
+                    if (data.lastUpdated) {
+                        setLastUpdated(new Date(data.lastUpdated).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }));
+                    }
+                }
+                if (logsSnap.exists()) {
+                    const data = logsSnap.val();
+                    setLogs(Object.keys(data).map(key => ({ id: key, ...data[key] })).sort((a,b) => (b.timestamp||0)-(a.timestamp||0)).slice(0,10));
+                }
+            } catch {/* silently ignore transient network errors */}
+        };
+        const id = setInterval(poll, 3000);
+        return () => clearInterval(id);
     }, []);
 
     const activeSlots = slots.filter(s => s.isActive);
@@ -107,11 +198,20 @@ const Dashboard = () => {
 
     const handleReserveSlot = async (e: React.FormEvent<HTMLFormElement>) => {
         e.preventDefault();
+        setReservationError(null);
         const form = e.currentTarget;
         const slotId = (form.elements.namedItem('slot') as HTMLSelectElement).value;
         const dateVal = (form.elements.namedItem('date') as HTMLInputElement).value;
         const timeVal = (form.elements.namedItem('time') as HTMLInputElement).value;
         if (!dateVal || !timeVal || !slotId) return;
+
+        // Past-time validation
+        const selectedDateTime = new Date(`${dateVal}T${timeVal}`);
+        const now = new Date();
+        if (selectedDateTime <= now) {
+            setReservationError('⛔ Cannot reserve a slot in the past. Please choose a future date and time.');
+            return;
+        }
 
         const updatePayload = {
             [`slots/${slotId}/isReserved`]: true,
@@ -124,6 +224,7 @@ const Dashboard = () => {
             action: 'reserve',
             timestamp: Date.now()
         });
+        form.reset();
     };
 
     return (
@@ -196,11 +297,21 @@ const Dashboard = () => {
         .status-glow-free {
             box-shadow: inset 0 0 12px rgba(52, 211, 153, 0.15);
         }
-        .status-glow-occupied {
-            box-shadow: inset 0 0 12px rgba(255, 180, 171, 0.3);
-        }
         .status-glow-reserved {
             box-shadow: inset 0 0 12px rgba(249, 115, 22, 0.2);
+        }
+        .custom-scrollbar::-webkit-scrollbar {
+            width: 6px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+            background: rgba(0, 229, 255, 0.2);
+            border-radius: 10px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+            background: rgba(0, 229, 255, 0.4);
         }
     
             `}</style>
@@ -255,7 +366,8 @@ const Dashboard = () => {
                             </div>
                         </div>
                     {/*  Parking Slot Grid  */}
-                    <div className="grid gap-6" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))" }}>
+                    <div className="max-h-[calc(100vh-320px)] overflow-y-auto pr-2 custom-scrollbar">
+                        <div className="grid gap-6" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))" }}>
                         {slots.map(slot => {
                             const isFree = slot.status === 'free';
                             const isReserved = isFree && slot.isReserved;
@@ -276,7 +388,7 @@ const Dashboard = () => {
                                 indicatorBg = 'bg-outline-variant shadow-none';
                                 borderDashed = 'border-dashed border-outline-variant/20 bg-surface-container-lowest/30';
                                 textColor = 'text-outline-variant';
-                                centerText = 'Closed';
+                                centerText = 'Maintenance';
                                 centerTextColor = 'text-outline-variant/50';
                                 carVisible = false;
                             } else if (isReserved) {
@@ -329,7 +441,7 @@ const Dashboard = () => {
                                         {isReserved && slot.reservedUntil && (
                                             <div className="mt-2 text-center fade-in">
                                                 <span className="bg-orange-500/10 text-orange-500 border border-orange-500/20 px-2 py-0.5 rounded text-[9px] font-bold tracking-wider">
-                                                    UNTIL {new Date(slot.reservedUntil).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+                                                    UNTIL {new Date(slot.reservedUntil).toLocaleTimeString('en-GB', {hour: '2-digit', minute:'2-digit', hour12: false})}
                                                 </span>
                                             </div>
                                         )}
@@ -337,6 +449,7 @@ const Dashboard = () => {
                                 </div>
                             );
                         })}
+                    </div>
                     </div>
                     {/*  Bottom Row: Environmental & Connection  */}
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
@@ -451,29 +564,180 @@ const Dashboard = () => {
                                 <span className="material-symbols-outlined text-primary-container text-lg mr-2">local_parking</span>
                                 <select name="slot" required className="bg-transparent border-none text-sm text-on-surface w-full focus:ring-0 p-0 font-label outline-none appearance-none cursor-pointer">
                                     <option value="" className="bg-surface-container-high text-on-surface-variant">Choose a free slot</option>
-                                    {slots.filter(s => s.status === 'free' && !s.isReserved).map(s => (
+                                    {slots.filter(s => s.isActive && s.status === 'free' && !s.isReserved).map(s => (
                                         <option key={s.id} value={s.id} className="bg-surface-container-high text-white">Slot {s.id}</option>
                                     ))}
                                 </select>
                             </div>
                         </div>
                         <div className="grid grid-cols-2 gap-4">
+                            {/* ── Custom Date Picker ── */}
                             <div>
                                 <label className="font-label text-[10px] uppercase text-on-surface-variant mb-1 block">Date</label>
-                                <div className="bg-surface-container-lowest rounded-lg p-3 flex items-center border border-outline-variant/10 focus-within:border-primary-container/40 transition-all">
-                                    <span className="material-symbols-outlined text-primary-container text-lg mr-2">event</span>
-                                    <input name="date" defaultValue={new Date().toLocaleDateString('en-CA')} required className="bg-transparent border-none text-sm text-on-surface-variant w-full focus:ring-0 p-0 font-label outline-none cursor-pointer" type="date" onClick={(e) => "showPicker" in e.currentTarget && (e.currentTarget as any).showPicker()} />
+                                <div className="relative" ref={datePickerRef}>
+                                    <div
+                                        onClick={() => { setShowDatePicker(v => !v); setShowTimePicker(false); }}
+                                        className="bg-surface-container-lowest rounded-lg p-3 flex items-center justify-between border border-outline-variant/10 hover:border-primary-container/40 transition-all cursor-pointer"
+                                    >
+                                        <div className="flex items-center space-x-2">
+                                            <span className="material-symbols-outlined text-primary-container text-lg">event</span>
+                                            <span className="font-mono text-sm font-bold text-white">
+                                                {selectedDate.toLocaleDateString('en-GB', { day:'2-digit', month:'short', year:'numeric' })}
+                                            </span>
+                                        </div>
+                                        <span className={`material-symbols-outlined text-on-surface-variant text-sm transition-transform duration-200 ${showDatePicker ? 'rotate-180' : ''}`}>expand_more</span>
+                                    </div>
+                                    {showDatePicker && (() => {
+                                        const firstDay = new Date(calViewYear, calViewMonth, 1).getDay();
+                                        const daysInMonth = new Date(calViewYear, calViewMonth + 1, 0).getDate();
+                                        const monthName = new Date(calViewYear, calViewMonth).toLocaleString('default', { month: 'long' });
+                                        const cells: (number | null)[] = [...Array(firstDay).fill(null), ...Array.from({length: daysInMonth}, (_, i) => i + 1)];
+                                        while (cells.length % 7 !== 0) cells.push(null);
+                                        return (
+                                            <div className="absolute bottom-full mb-2 left-0 right-0 z-50 bg-[#0f1a2e] border border-primary/20 rounded-xl shadow-[0_0_30px_rgba(0,229,255,0.15)] overflow-hidden" style={{minWidth: 220}}>
+                                                <div className="flex items-center justify-between px-3 py-2 border-b border-outline-variant/10">
+                                                    <button type="button" onClick={() => { if (calViewMonth === 0) { setCalViewMonth(11); setCalViewYear(y => y-1); } else setCalViewMonth(m=>m-1); }} className="text-on-surface-variant hover:text-white p-1 rounded cursor-pointer transition-colors">‹</button>
+                                                    <span className="font-label text-xs font-bold text-on-surface">{monthName} {calViewYear}</span>
+                                                    <button type="button" onClick={() => { if (calViewMonth === 11) { setCalViewMonth(0); setCalViewYear(y => y+1); } else setCalViewMonth(m=>m+1); }} className="text-on-surface-variant hover:text-white p-1 rounded cursor-pointer transition-colors">›</button>
+                                                </div>
+                                                <div className="grid grid-cols-7 text-center">
+                                                    {['Su','Mo','Tu','We','Th','Fr','Sa'].map(d => (
+                                                        <div key={d} className="font-label text-[9px] text-on-surface-variant/50 py-1.5">{d}</div>
+                                                    ))}
+                                                    {cells.map((day, i) => {
+                                                        if (!day) return <div key={`e${i}`} />;
+                                                        const date = new Date(calViewYear, calViewMonth, day);
+                                                        const isPast = date < new Date(today.getFullYear(), today.getMonth(), today.getDate());
+                                                        const isSelected = selectedDate.getDate() === day && selectedDate.getMonth() === calViewMonth && selectedDate.getFullYear() === calViewYear;
+                                                        const isToday = today.getDate() === day && today.getMonth() === calViewMonth && today.getFullYear() === calViewYear;
+                                                        return (
+                                                            <button type="button" key={day}
+                                                                disabled={isPast}
+                                                                onClick={() => { setSelectedDate(date); setShowDatePicker(false); }}
+                                                                className={`text-xs font-mono py-1.5 mx-0.5 my-0.5 rounded-md transition-all cursor-pointer ${
+                                                                    isPast ? 'opacity-20 cursor-not-allowed' :
+                                                                    isSelected ? 'bg-primary-container text-[#080d1a] font-bold' :
+                                                                    isToday ? 'border border-primary-container/60 text-primary-container' :
+                                                                    'text-on-surface-variant hover:bg-surface-container-high hover:text-white'
+                                                                }`}>{day}</button>
+                                                        );
+                                                    })}
+                                                </div>
+                                            </div>
+                                        );
+                                    })()}
+                                    <input type="hidden" name="date" value={selectedDate.toLocaleDateString('en-CA')} />
                                 </div>
                             </div>
+
+                            {/* ── Custom 24h Wheel Time Picker ── */}
                             <div>
                                 <label className="font-label text-[10px] uppercase text-on-surface-variant mb-1 block">Time</label>
-                                <div className="bg-surface-container-lowest rounded-lg p-3 flex items-center border border-outline-variant/10 focus-within:border-primary-container/40 transition-all">
-                                    <span className="material-symbols-outlined text-primary-container text-lg mr-2">schedule</span>
-                                    <input name="time" defaultValue={new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })} required className="bg-transparent border-none text-sm text-on-surface-variant w-full focus:ring-0 p-0 font-label outline-none cursor-pointer" type="time" onClick={(e) => "showPicker" in e.currentTarget && (e.currentTarget as any).showPicker()} />
+                                <div className="relative" ref={timePickerRef}>
+                                    <div
+                                        onClick={() => { setShowTimePicker(v => !v); setShowDatePicker(false); }}
+                                        className="bg-surface-container-lowest rounded-lg p-3 flex items-center justify-between border border-outline-variant/10 hover:border-primary-container/40 transition-all cursor-pointer"
+                                    >
+                                        <div className="flex items-center space-x-2">
+                                            <span className="material-symbols-outlined text-primary-container text-lg">schedule</span>
+                                            <span className="font-mono text-sm font-bold tracking-widest text-white">
+                                                {String(selectedHour).padStart(2,'0')}:{String(selectedMinute).padStart(2,'0')}
+                                            </span>
+                                        </div>
+                                        <span className={`material-symbols-outlined text-on-surface-variant text-sm transition-transform duration-200 ${showTimePicker ? 'rotate-180' : ''}`}>expand_more</span>
+                                    </div>
+
+                                    {showTimePicker && (() => {
+                                        const MINUTES = [0,5,10,15,20,25,30,35,40,45,50,55];
+                                        const hourColor = (h: number) => h < 6 ? '#60a5fa' : h < 12 ? '#fbbf24' : h < 18 ? '#fb923c' : '#a78bfa';
+                                        const hourEmoji = (h: number) => h < 6 ? '🌙' : h < 12 ? '🌅' : h < 18 ? '☀️' : '🌆';
+
+                                        const applyQuick = (mins: number) => {
+                                            const t = new Date(Date.now() + mins * 60000);
+                                            setSelectedHour(t.getHours());
+                                            setSelectedMinute(Math.ceil(t.getMinutes() / 5) * 5 % 60);
+                                            setShowTimePicker(false);
+                                        };
+
+                                        const renderWheel = (
+                                            wheelRef: React.RefObject<HTMLDivElement | null>,
+                                            value: number,
+                                            items: number[],
+                                            onChange: (v: number) => void,
+                                            label: string,
+                                            colorFn?: (v: number) => string,
+                                            emojiFn?: (v: number) => string
+                                        ) => {
+                                            const idx = items.indexOf(value);
+                                            const getItem = (offset: number) => items[(idx + offset + items.length * 1000) % items.length];
+                                            return (
+                                                <div className="flex-1 flex flex-col select-none">
+                                                    <p className="font-label text-[9px] uppercase text-center py-1.5 border-b border-outline-variant/10" style={{color: colorFn ? colorFn(value) : '#94a3b8'}}>{label}</p>
+                                                    <div ref={wheelRef} className="flex flex-col items-center py-1 cursor-ns-resize" style={{touchAction:'none'}}>
+                                                        {[-2,-1,0,1,2].map(offset => {
+                                                            const v = getItem(offset);
+                                                            const isSel = offset === 0;
+                                                            const col = colorFn ? colorFn(v) : undefined;
+                                                            return (
+                                                                <div key={offset} onClick={() => onChange(v)}
+                                                                    className={`w-full flex items-center justify-center gap-1 py-1.5 rounded-md transition-all duration-100 cursor-pointer text-xs font-mono ${isSel ? 'scale-110' : 'opacity-40 scale-95 hover:opacity-70'}`}
+                                                                    style={isSel ? {color: col ?? '#00e5ff', background: col ? `${col}18` : 'rgba(0,229,255,0.08)', fontWeight:700} : {color: col ?? '#94a3b8'}}>
+                                                                    <span>{String(v).padStart(2,'0')}</span>
+                                                                    {isSel && emojiFn && <span className="text-[10px]">{emojiFn(v)}</span>}
+                                                                </div>
+                                                            );
+                                                        })}
+                                                    </div>
+                                                    <div className="flex justify-center gap-3 py-1">
+                                                        <button type="button" onClick={() => onChange(items[(idx-1+items.length)%items.length])} className="text-on-surface-variant/40 hover:text-on-surface-variant/80 transition-colors cursor-pointer text-xs">▲</button>
+                                                        <button type="button" onClick={() => onChange(items[(idx+1)%items.length])} className="text-on-surface-variant/40 hover:text-on-surface-variant/80 transition-colors cursor-pointer text-xs">▼</button>
+                                                    </div>
+                                                </div>
+                                            );
+                                        };
+
+                                        return (
+                                            <div className="absolute bottom-full mb-2 left-0 right-0 z-50 bg-[#0f1a2e] border border-primary/20 rounded-xl shadow-[0_0_30px_rgba(0,229,255,0.15)] overflow-hidden">
+                                                {/* Quick Chips */}
+                                                <div className="p-2.5 border-b border-outline-variant/10 flex flex-wrap gap-1.5">
+                                                    {[{label:'+15m',mins:15},{label:'+30m',mins:30},{label:'+1h',mins:60},{label:'+2h',mins:120}].map(q => (
+                                                        <button key={q.label} type="button" onClick={() => applyQuick(q.mins)}
+                                                            className="px-2.5 py-1 text-[10px] font-bold font-label rounded-md bg-primary-container/10 text-primary-container border border-primary-container/20 hover:bg-primary-container/25 transition-all cursor-pointer">
+                                                            {q.label}
+                                                        </button>
+                                                    ))}
+                                                </div>
+                                                {/* Live display */}
+                                                <div className="px-3 py-2 border-b border-outline-variant/10 flex items-center justify-between">
+                                                    <span className="font-label text-[10px] uppercase tracking-widest text-on-surface-variant">Select Time (24h)</span>
+                                                    <span className="font-mono text-xs font-bold text-primary-container">{String(selectedHour).padStart(2,'0')}:{String(selectedMinute).padStart(2,'0')}</span>
+                                                </div>
+                                                {/* Drum wheels */}
+                                                <div className="relative">
+                                                    <div className="pointer-events-none absolute top-5 inset-x-0 h-5 bg-gradient-to-b from-[#0f1a2e] to-transparent z-10"/>
+                                                    <div className="pointer-events-none absolute bottom-9 inset-x-0 h-5 bg-gradient-to-t from-[#0f1a2e] to-transparent z-10"/>
+                                                    <div className="flex border-b border-outline-variant/10">
+                                                        {renderWheel(hourWheelRef, selectedHour, Array.from({length:24},(_,i)=>i), setSelectedHour, 'Hour', hourColor, hourEmoji)}
+                                                        <div className="w-px bg-outline-variant/20 self-stretch"/>
+                                                        {renderWheel(minWheelRef, selectedMinute, MINUTES, (v)=>{setSelectedMinute(v); setShowTimePicker(false);}, 'Min')}
+                                                    </div>
+                                                </div>
+                                                <p className="text-center text-on-surface-variant/30 font-label text-[9px] py-1.5">scroll · tap ▲▼ · or use quick chips</p>
+                                            </div>
+                                        );
+                                    })()}
+                                    <input type="hidden" name="time" value={`${String(selectedHour).padStart(2,'0')}:${String(selectedMinute).padStart(2,'0')}`} />
                                 </div>
                             </div>
                         </div>
-                        <button type="submit" className="w-full bg-gradient-to-r from-primary-container to-primary py-3 rounded-lg font-headline font-extrabold text-on-primary-container hover:brightness-110 active:scale-95 transition-all mt-4 cursor-pointer">
+                        {/* Past-time error */}
+                        {reservationError && (
+                            <div className="flex items-start space-x-2 bg-error/10 border border-error/30 rounded-lg px-3 py-2">
+                                <span className="material-symbols-outlined text-error text-sm mt-0.5 flex-shrink-0">error</span>
+                                <p className="font-label text-[11px] text-error leading-relaxed">{reservationError}</p>
+                            </div>
+                        )}
+                        <button type="submit" className="w-full bg-gradient-to-r from-primary-container to-primary py-3 rounded-lg font-headline font-extrabold text-on-primary-container hover:brightness-110 active:scale-95 transition-all mt-2 cursor-pointer">
                             CONFIRM RESERVATION
                         </button>
                     </form>
@@ -485,7 +749,7 @@ const Dashboard = () => {
                         <span className="material-symbols-outlined text-primary-container text-lg">history</span>
                         <span>Recent Activity</span>
                     </h3>
-                    <div className="space-y-4">
+                    <div className="max-h-[300px] overflow-y-auto pr-2 custom-scrollbar space-y-4">
                         {logs.length === 0 ? (
                             <p className="text-on-surface-variant text-xs font-label opacity-60">No recent logs...</p>
                         ) : (
@@ -497,7 +761,7 @@ const Dashboard = () => {
                                             Slot {log.slot} <span className="font-normal text-on-surface-variant uppercase text-[10px] ml-1">{log.action || 'updated'}</span>
                                         </p>
                                         <p className="text-on-surface-variant text-[10px] font-mono">
-                                            {log.timestamp ? new Date(log.timestamp).toLocaleTimeString() : '--:--:--'}
+                                            {log.timestamp ? new Date(log.timestamp).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }) : '--:--:--'}
                                         </p>
                                     </div>
                                 </div>

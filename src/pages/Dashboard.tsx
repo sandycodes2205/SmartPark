@@ -140,6 +140,9 @@ const Dashboard = () => {
         .status-glow-occupied {
             box-shadow: inset 0 0 12px rgba(255, 180, 171, 0.3);
         }
+        .status-glow-reserved {
+            box-shadow: inset 0 0 12px rgba(251, 191, 36, 0.2);
+        }
     
             `}</style>
             <div className="min-h-screen bg-background font-body text-on-surface">
@@ -186,29 +189,63 @@ const Dashboard = () => {
                     <div className="grid gap-6" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))" }}>
                         {slots.map(slot => {
                             const isFree = slot.status === 'free';
+                            const isReserved = isFree && slot.isReserved;
+
+                            let glowClass = 'status-glow-occupied';
+                            let borderClass = 'bg-surface-container-high/60 border-error/20 shadow-[0_8px_30px_rgb(0,0,0,0.12)]';
+                            let indicatorBg = 'bg-error shadow-[0_0_12px_rgba(255,180,171,0.8)]';
+                            let borderDashed = 'border-solid border-error/30 bg-error/10';
+                            let textColor = 'text-error';
+                            let centerText = 'Occupied';
+                            let centerTextColor = 'text-error/60';
+                            let carVisible = true;
+
+                            if (isReserved) {
+                                glowClass = 'status-glow-reserved';
+                                borderClass = 'border-amber-400/20 bg-amber-400/5 hover:scale-95';
+                                indicatorBg = 'bg-amber-400 shadow-[0_0_12px_#fbbf24] animate-pulse';
+                                borderDashed = 'border-dashed border-amber-400/50 group-hover:border-amber-400/70';
+                                textColor = 'text-amber-400';
+                                centerText = 'Reserved';
+                                centerTextColor = 'text-amber-400/80';
+                                carVisible = false;
+                            } else if (isFree) {
+                                glowClass = 'status-glow-free';
+                                borderClass = 'border-outline-variant/10 hover:scale-95';
+                                indicatorBg = 'bg-emerald-400 shadow-[0_0_12px_#34d399] animate-pulse';
+                                borderDashed = 'border-dashed border-emerald-400/40 group-hover:border-emerald-400/60';
+                                textColor = 'text-emerald-400';
+                                centerText = 'Empty';
+                                centerTextColor = 'text-emerald-400/60';
+                                carVisible = false;
+                            }
+
                             return (
-                                <div key={slot.id} className={`glass-panel flex flex-col justify-between h-72 rounded-3xl p-6 border transition-all duration-700 cursor-pointer group overflow-hidden ${isFree ? 'border-outline-variant/10 status-glow-free hover:scale-95' : 'bg-surface-container-high/60 border-error/20 status-glow-occupied shadow-[0_8px_30px_rgb(0,0,0,0.12)]'}`}>
+                                <div key={slot.id} className={`glass-panel flex flex-col justify-between h-72 rounded-3xl p-6 border transition-all duration-700 cursor-pointer group overflow-hidden ${borderClass} ${glowClass}`}>
                                     <div className="flex justify-between items-start z-10 relative">
-                                        <span className="font-label text-base font-bold text-on-surface-variant">Slot {slot.id}</span>
-                                        <span className={`w-3 h-3 rounded-full transition-colors duration-500 ${isFree ? 'bg-emerald-400 shadow-[0_0_12px_#34d399] animate-pulse' : 'bg-error shadow-[0_0_12px_rgba(255,180,171,0.8)]'}`}></span>
+                                        <div className="flex flex-col">
+                                            <span className="font-label text-base font-bold text-on-surface-variant">Slot {slot.id}</span>
+                                            {slot.lastlog && <span className="text-[9px] text-on-surface-variant/50 font-mono tracking-widest mt-1">{slot.lastlog}</span>}
+                                        </div>
+                                        <span className={`w-3 h-3 rounded-full transition-colors duration-500 ${indicatorBg}`}></span>
                                     </div>
                                     <div className="flex-1 flex flex-col items-center justify-center mt-4">
                                         {/* Parking Area */}
-                                        <div className={`relative w-24 h-40 border-[4px] rounded-xl flex items-center justify-center mb-4 transition-all duration-700 overflow-hidden ${isFree ? 'border-dashed border-emerald-400/40 group-hover:border-emerald-400/60' : 'border-solid border-error/30 bg-error/10'}`}>
+                                        <div className={`relative w-24 h-40 border-[4px] rounded-xl flex items-center justify-center mb-4 transition-all duration-700 overflow-hidden ${borderDashed}`}>
                                             
-                                            {/* Empty Text */}
-                                            <span className={`font-label text-xs font-bold text-emerald-400/60 uppercase tracking-widest -rotate-90 origin-center absolute transition-all duration-500 delay-300 ${isFree ? 'opacity-100 scale-100' : 'opacity-0 scale-50'}`}>Empty</span>
+                                            {/* Empty/Reserved Text */}
+                                            <span className={`font-label text-xs font-bold ${centerTextColor} uppercase tracking-widest -rotate-90 origin-center absolute transition-all duration-500 delay-300 ${!carVisible ? 'opacity-100 scale-100' : 'opacity-0 scale-50'}`}>{centerText}</span>
 
                                             {/* Car Vector Wrapper */}
-                                            <div className={`absolute inset-0 flex items-center justify-center transition-all duration-1000 ease-[cubic-bezier(0.25,1,0.5,1)] ${isFree ? 'translate-y-[150%] opacity-0 scale-95' : 'translate-y-0 opacity-100 scale-100'}`}>
+                                            <div className={`absolute inset-0 flex items-center justify-center transition-all duration-1000 ease-[cubic-bezier(0.25,1,0.5,1)] ${!carVisible ? 'translate-y-[150%] opacity-0 scale-95' : 'translate-y-0 opacity-100 scale-100'}`}>
                                                 {/* Top Down Car SVG */}
                                                 <svg viewBox="0 0 47.032 47.032" className="w-[85%] h-[90%] drop-shadow-[0_15px_15px_rgba(0,0,0,0.5)]">
                                                     <path fill="#ffffff" d="M29.395,0H17.636c-3.117,0-5.643,3.467-5.643,6.584v34.804c0,3.116,2.526,5.644,5.643,5.644h11.759 c3.116,0,5.644-2.527,5.644-5.644V6.584C35.037,3.467,32.511,0,29.395,0z M34.05,14.188v11.665l-2.729,0.351v-4.806L34.05,14.188z M32.618,10.773c-1.016,3.9-2.219,8.51-2.219,8.51H16.631l-2.222-8.51C14.41,10.773,23.293,7.755,32.618,10.773z M15.741,21.713 v4.492l-2.73-0.349V14.502L15.741,21.713z M13.011,37.938V27.579l2.73,0.343v8.196L13.011,37.938z M14.568,40.882l2.218-3.336 h13.771l2.219,3.336H14.568z M31.321,35.805v-7.872l2.729-0.355v10.048L31.321,35.805z" className="drop-shadow-[0_0_10px_rgba(255,255,255,0.4)]" />
                                                 </svg>
                                             </div>
                                         </div>
-                                        <span className={`font-headline font-extrabold text-2xl transition-colors duration-500 z-10 relative ${isFree ? 'text-emerald-400' : 'text-error'}`}>
-                                            {isFree ? 'Free' : 'Occupied'}
+                                        <span className={`font-headline font-extrabold text-2xl transition-colors duration-500 z-10 relative ${textColor}`}>
+                                            {centerText === 'Empty' ? 'Free' : centerText}
                                         </span>
                                     </div>
                                 </div>
@@ -312,7 +349,6 @@ const Dashboard = () => {
                         </div>
                     </div>
                 </div>
-                {/*  Book your parking  */}
                 <div className="glass-panel rounded-xl p-6 border border-primary/20 shadow-xl">
                     <h3 className="font-label text-sm font-bold text-primary-container mb-4">Book your parking</h3>
                     <div className="space-y-4">
@@ -320,12 +356,39 @@ const Dashboard = () => {
                             <label className="font-label text-[10px] uppercase text-on-surface-variant mb-1 block">Arrival Time</label>
                             <div className="bg-surface-container-lowest rounded-lg p-3 flex items-center border border-outline-variant/10 focus-within:border-primary-container/40 transition-all">
                                 <span className="material-symbols-outlined text-primary-container text-lg mr-2">calendar_today</span>
-                                <input className="bg-transparent border-none text-sm text-on-surface w-full focus:ring-0 p-0 font-label" type="text" value="Nov 24, 2023 - 14:00" />
+                                <input className="bg-transparent border-none text-sm text-on-surface w-full focus:ring-0 p-0 font-label" type="text" defaultValue="Nov 24, 2023 - 14:00" />
                             </div>
                         </div>
                         <button className="w-full bg-gradient-to-r from-primary-container to-primary py-3 rounded-lg font-headline font-extrabold text-on-primary-container hover:brightness-110 active:scale-95 transition-all">
                             CONFIRM RESERVATION
                         </button>
+                    </div>
+                </div>
+
+                {/* Recent Activity Logs */}
+                <div className="bg-surface-container rounded-xl p-6 border border-outline-variant/10">
+                    <h3 className="font-label text-sm font-bold text-on-surface mb-4 flex items-center space-x-2">
+                        <span className="material-symbols-outlined text-primary-container text-lg">history</span>
+                        <span>Recent Activity</span>
+                    </h3>
+                    <div className="space-y-4">
+                        {logs.length === 0 ? (
+                            <p className="text-on-surface-variant text-xs font-label opacity-60">No recent logs...</p>
+                        ) : (
+                            logs.map((log) => (
+                                <div key={log.id} className="flex items-start space-x-3 text-sm">
+                                    <div className="mt-1 flex-shrink-0 w-2 h-2 rounded-full bg-primary-container shadow-[0_0_10px_#00e5ff]"></div>
+                                    <div className="flex-1 min-w-0">
+                                        <p className="font-label font-bold text-on-surface truncate">
+                                            Slot {log.slot} <span className="font-normal text-on-surface-variant uppercase text-[10px] ml-1">{log.action || 'updated'}</span>
+                                        </p>
+                                        <p className="text-on-surface-variant text-[10px] font-mono">
+                                            {log.timestamp ? new Date(log.timestamp).toLocaleTimeString() : '--:--:--'}
+                                        </p>
+                                    </div>
+                                </div>
+                            ))
+                        )}
                     </div>
                 </div>
 

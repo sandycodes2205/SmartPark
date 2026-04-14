@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { db } from '../firebase';
-import { ref, onValue } from 'firebase/database';
+import { ref, onValue, update, push } from 'firebase/database';
 
 const Dashboard = () => {
     const [slots, setSlots] = useState<any[]>([
@@ -24,9 +24,10 @@ const Dashboard = () => {
                 const data = snapshot.val();
                 const formattedSlots = Object.keys(data).map(key => ({
                     id: key,
-                    status: data[key].status,
+                    status: ['A3', 'A4', 'A5'].includes(key) ? 'out_of_service' : data[key].status,
                     isReserved: Boolean(data[key].isReserved),
-                    lastlog: data[key].lastlog
+                    lastlog: data[key].lastlog,
+                    reservedUntil: data[key].reservedUntil
                 }));
                 formattedSlots.sort((a, b) => a.id.localeCompare(b.id));
                 setSlots(formattedSlots);
@@ -64,9 +65,66 @@ const Dashboard = () => {
         };
     }, []);
 
-    const freeSlots = slots.filter(s => s.status === 'free').length;
-    const occupiedSlots = slots.filter(s => s.status === 'occupied').length;
-    const isFull = occupiedSlots === 5;
+    const activeSlots = slots.filter(s => s.status !== 'out_of_service');
+    const freeSlots = activeSlots.filter(s => s.status === 'free' && !s.isReserved).length;
+    const reservedSlots = activeSlots.filter(s => s.status === 'free' && s.isReserved).length;
+    const occupiedSlots = activeSlots.filter(s => s.status === 'occupied').length;
+    const isFull = occupiedSlots === activeSlots.length;
+
+    const handleParkCar = async () => {
+        const availableSlots = activeSlots.filter(s => s.status === 'free' && !s.isReserved);
+        if (availableSlots.length === 0) return;
+        const target = availableSlots[Math.floor(Math.random() * availableSlots.length)];
+        const updatePayload = {
+            [`slots/${target.id}/status`]: 'occupied',
+            [`system/lastUpdated`]: Date.now()
+        };
+        await update(ref(db), updatePayload);
+        push(ref(db, 'logs'), {
+            slot: target.id,
+            action: 'park_in',
+            timestamp: Date.now()
+        });
+    };
+
+    const handleRemoveCar = async () => {
+        const fullSlots = slots.filter(s => s.status === 'occupied');
+        if (fullSlots.length === 0) return;
+        const target = fullSlots[Math.floor(Math.random() * fullSlots.length)];
+        const updatePayload = {
+            [`slots/${target.id}/status`]: 'free',
+            [`slots/${target.id}/isReserved`]: false,
+            [`system/lastUpdated`]: Date.now()
+        };
+        await update(ref(db), updatePayload);
+        push(ref(db, 'logs'), {
+            slot: target.id,
+            action: 'park_out',
+            timestamp: Date.now()
+        });
+    };
+
+    const handleReserveSlot = async (e: React.FormEvent<HTMLFormElement>) => {
+        e.preventDefault();
+        const form = e.currentTarget;
+        const slotId = (form.elements.namedItem('slot') as HTMLSelectElement).value;
+        const dateVal = (form.elements.namedItem('date') as HTMLInputElement).value;
+        const timeVal = (form.elements.namedItem('time') as HTMLInputElement).value;
+        if (!dateVal || !timeVal || !slotId) return;
+
+        const updatePayload = {
+            [`slots/${slotId}/isReserved`]: true,
+            [`slots/${slotId}/reservedUntil`]: `${dateVal}T${timeVal}`,
+            [`system/lastUpdated`]: Date.now()
+        };
+        await update(ref(db), updatePayload);
+        push(ref(db, 'logs'), {
+            slot: slotId,
+            action: 'reserve',
+            timestamp: Date.now()
+        });
+    };
+
     return (
         <div className="theme-dashboard">
             <style>{`
@@ -141,7 +199,7 @@ const Dashboard = () => {
             box-shadow: inset 0 0 12px rgba(255, 180, 171, 0.3);
         }
         .status-glow-reserved {
-            box-shadow: inset 0 0 12px rgba(251, 191, 36, 0.2);
+            box-shadow: inset 0 0 12px rgba(249, 115, 22, 0.2);
         }
     
             `}</style>
@@ -178,10 +236,20 @@ const Dashboard = () => {
 
                             </div>
                             <div className="text-right hidden sm:block">
-                                <span className="font-label text-[0.65rem] uppercase tracking-widest text-primary-container opacity-70">System Health</span>
-                                <div className="flex items-center space-x-2 text-primary-container">
-                                    <span className="material-symbols-outlined text-sm" style={{ fontVariationSettings: "'FILL' 1" }}>sensors</span>
-                                    <span className="font-bold text-lg font-label">{isOnline ? '99.8%' : '0.0%'}</span>
+                                <div className="flex flex-col items-end">
+                                    <span className="font-label text-[0.65rem] uppercase tracking-widest text-primary-container opacity-70">System Health</span>
+                                    <div className="flex items-center space-x-2 text-primary-container justify-end">
+                                        <span className="material-symbols-outlined text-sm" style={{ fontVariationSettings: "'FILL' 1" }}>sensors</span>
+                                        <span className="font-bold text-lg font-label">{isOnline ? '99.8%' : '0.0%'}</span>
+                                    </div>
+                                    <div className="flex space-x-2 mt-2 justify-end">
+                                        <button onClick={handleParkCar} className="px-3 py-1 bg-surface-container-high border border-outline-variant/30 rounded text-[10px] font-label text-on-surface-variant hover:text-white hover:border-primary/50 transition-all flex items-center space-x-1 cursor-pointer">
+                                            <span>Park 🚗</span>
+                                        </button>
+                                        <button onClick={handleRemoveCar} className="px-3 py-1 bg-surface-container-high border border-outline-variant/30 rounded text-[10px] font-label text-on-surface-variant hover:text-white hover:border-error/50 transition-all flex items-center space-x-1 cursor-pointer">
+                                            <span>Remove 💨</span>
+                                        </button>
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -190,6 +258,7 @@ const Dashboard = () => {
                         {slots.map(slot => {
                             const isFree = slot.status === 'free';
                             const isReserved = isFree && slot.isReserved;
+                            const isOutOfService = slot.status === 'out_of_service';
 
                             let glowClass = 'status-glow-occupied';
                             let borderClass = 'bg-surface-container-high/60 border-error/20 shadow-[0_8px_30px_rgb(0,0,0,0.12)]';
@@ -200,14 +269,23 @@ const Dashboard = () => {
                             let centerTextColor = 'text-error/60';
                             let carVisible = true;
 
-                            if (isReserved) {
+                            if (isOutOfService) {
+                                glowClass = '';
+                                borderClass = 'bg-surface-container/30 border-outline-variant/10 opacity-60 grayscale';
+                                indicatorBg = 'bg-outline-variant shadow-none';
+                                borderDashed = 'border-dashed border-outline-variant/20 bg-surface-container-lowest/30';
+                                textColor = 'text-outline-variant';
+                                centerText = 'Closed';
+                                centerTextColor = 'text-outline-variant/50';
+                                carVisible = false;
+                            } else if (isReserved) {
                                 glowClass = 'status-glow-reserved';
-                                borderClass = 'border-amber-400/20 bg-amber-400/5 hover:scale-95';
-                                indicatorBg = 'bg-amber-400 shadow-[0_0_12px_#fbbf24] animate-pulse';
-                                borderDashed = 'border-dashed border-amber-400/50 group-hover:border-amber-400/70';
-                                textColor = 'text-amber-400';
+                                borderClass = 'border-orange-500/30 bg-orange-500/10';
+                                indicatorBg = 'bg-orange-500 shadow-[0_0_12px_#f97316] animate-pulse';
+                                borderDashed = 'border-dashed border-orange-500/60 group-hover:border-orange-500/80';
+                                textColor = 'text-orange-500';
                                 centerText = 'Reserved';
-                                centerTextColor = 'text-amber-400/80';
+                                centerTextColor = 'text-orange-500/80';
                                 carVisible = false;
                             } else if (isFree) {
                                 glowClass = 'status-glow-free';
@@ -247,6 +325,13 @@ const Dashboard = () => {
                                         <span className={`font-headline font-extrabold text-2xl transition-colors duration-500 z-10 relative ${textColor}`}>
                                             {centerText === 'Empty' ? 'Free' : centerText}
                                         </span>
+                                        {isReserved && slot.reservedUntil && (
+                                            <div className="mt-2 text-center fade-in">
+                                                <span className="bg-orange-500/10 text-orange-500 border border-orange-500/20 px-2 py-0.5 rounded text-[9px] font-bold tracking-wider">
+                                                    UNTIL {new Date(slot.reservedUntil).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+                                                </span>
+                                            </div>
+                                        )}
                                     </div>
                                 </div>
                             );
@@ -317,52 +402,80 @@ const Dashboard = () => {
             {/*  Right Column: Sidebar  */}
             <div className="lg:col-span-4 space-y-8">
                 {/*  Parking Overview  */}
-                <div className="bg-surface-container rounded-xl p-6 border border-outline-variant/10">
-                    <h3 className="font-label text-sm font-bold text-on-surface mb-6">Parking Overview</h3>
+                <div className="bg-surface-container rounded-xl p-8 border border-outline-variant/10">
+                    <h3 className="font-label text-base font-bold text-on-surface mb-8">Parking Overview</h3>
                     <div className="flex items-center justify-between">
-                        <div className="relative w-24 h-24">
+                        <div className="relative w-36 h-36 flex-shrink-0">
                             {/*  Simple visual ring representation  */}
-                            <svg className="w-full h-full transform -rotate-90" viewBox="0 0 96 96">
-                                <circle className="text-surface-variant" cx="48" cy="48" fill="transparent" r="40" stroke="currentColor" strokeWidth="12"></circle>
-                                <circle className="text-primary-container" cx="48" cy="48" fill="transparent" r="40" stroke="currentColor" strokeDasharray="251.2" strokeDashoffset={occupiedSlots === 0 ? "251.2" : (251.2 - (occupiedSlots / 5) * 251.2).toString()} strokeWidth="12" strokeLinecap="round" style={{ transition: "stroke-dashoffset 0.5s ease" }}></circle>
+                            <svg className="w-full h-full transform -rotate-90 drop-shadow-xl" viewBox="0 0 96 96">
+                                <circle className="text-surface-variant/50" cx="48" cy="48" fill="transparent" r="40" stroke="currentColor" strokeWidth="12"></circle>
+                                <circle className="text-primary-container drop-shadow-[0_0_8px_#00E5FF]" cx="48" cy="48" fill="transparent" r="40" stroke="currentColor" strokeDasharray="251.2" strokeDashoffset={activeSlots.length === 0 ? "251.2" : (251.2 - ((occupiedSlots + reservedSlots) / activeSlots.length) * 251.2).toString()} strokeWidth="12" strokeLinecap="round" style={{ transition: "stroke-dashoffset 0.5s ease" }}></circle>
                             </svg>
                             <div className="absolute inset-0 flex flex-col items-center justify-center">
-                                <span className="font-headline font-extrabold text-xl text-white leading-none">5</span>
-                                <span className="font-label text-[8px] text-on-surface-variant">TOTAL</span>
+                                <span className="font-headline font-extrabold text-4xl text-white leading-none">{activeSlots.length}</span>
+                                <span className="font-label text-[10px] text-on-surface-variant tracking-widest mt-1">ACTIVE</span>
                             </div>
                         </div>
-                        <div className="flex-1 ml-8 space-y-3">
+                        <div className="flex-1 ml-10 space-y-4">
                             <div className="flex justify-between items-center">
-                                <div className="flex items-center space-x-2">
-                                    <div className="w-2 h-2 rounded-full bg-primary-container"></div>
-                                    <span className="font-label text-xs text-on-surface-variant">Free</span>
+                                <div className="flex items-center space-x-3">
+                                    <div className="w-3 h-3 rounded-full bg-primary-container shadow-[0_0_8px_#00E5FF]"></div>
+                                    <span className="font-label text-sm text-on-surface-variant font-medium">Free</span>
                                 </div>
-                                <span className="font-headline font-bold text-white">{freeSlots}</span>
+                                <span className="font-headline font-bold text-xl text-white">{freeSlots}</span>
                             </div>
                             <div className="flex justify-between items-center">
-                                <div className="flex items-center space-x-2">
-                                    <div className="w-2 h-2 rounded-full bg-error"></div>
-                                    <span className="font-label text-xs text-on-surface-variant">Occupied</span>
+                                <div className="flex items-center space-x-3">
+                                    <div className="w-3 h-3 rounded-full bg-orange-500 shadow-[0_0_8px_#f97316]"></div>
+                                    <span className="font-label text-sm text-on-surface-variant font-medium">Reserved</span>
                                 </div>
-                                <span className="font-headline font-bold text-white">{occupiedSlots}</span>
+                                <span className="font-headline font-bold text-xl text-white">{reservedSlots}</span>
+                            </div>
+                            <div className="flex justify-between items-center">
+                                <div className="flex items-center space-x-3">
+                                    <div className="w-3 h-3 rounded-full bg-error shadow-[0_0_8px_rgba(255,180,171,0.5)]"></div>
+                                    <span className="font-label text-sm text-on-surface-variant font-medium">Occupied</span>
+                                </div>
+                                <span className="font-headline font-bold text-xl text-white">{occupiedSlots}</span>
                             </div>
                         </div>
                     </div>
                 </div>
                 <div className="glass-panel rounded-xl p-6 border border-primary/20 shadow-xl">
                     <h3 className="font-label text-sm font-bold text-primary-container mb-4">Book your parking</h3>
-                    <div className="space-y-4">
+                    <form onSubmit={handleReserveSlot} className="space-y-4">
                         <div>
-                            <label className="font-label text-[10px] uppercase text-on-surface-variant mb-1 block">Arrival Time</label>
+                            <label className="font-label text-[10px] uppercase text-on-surface-variant mb-1 block">Select Slot</label>
                             <div className="bg-surface-container-lowest rounded-lg p-3 flex items-center border border-outline-variant/10 focus-within:border-primary-container/40 transition-all">
-                                <span className="material-symbols-outlined text-primary-container text-lg mr-2">calendar_today</span>
-                                <input className="bg-transparent border-none text-sm text-on-surface w-full focus:ring-0 p-0 font-label" type="text" defaultValue="Nov 24, 2023 - 14:00" />
+                                <span className="material-symbols-outlined text-primary-container text-lg mr-2">local_parking</span>
+                                <select name="slot" required className="bg-transparent border-none text-sm text-on-surface w-full focus:ring-0 p-0 font-label outline-none appearance-none cursor-pointer">
+                                    <option value="" className="bg-surface-container-high text-on-surface-variant">Choose a free slot</option>
+                                    {slots.filter(s => s.status === 'free' && !s.isReserved).map(s => (
+                                        <option key={s.id} value={s.id} className="bg-surface-container-high text-white">Slot {s.id}</option>
+                                    ))}
+                                </select>
                             </div>
                         </div>
-                        <button className="w-full bg-gradient-to-r from-primary-container to-primary py-3 rounded-lg font-headline font-extrabold text-on-primary-container hover:brightness-110 active:scale-95 transition-all">
+                        <div className="grid grid-cols-2 gap-4">
+                            <div>
+                                <label className="font-label text-[10px] uppercase text-on-surface-variant mb-1 block">Date</label>
+                                <div className="bg-surface-container-lowest rounded-lg p-3 flex items-center border border-outline-variant/10 focus-within:border-primary-container/40 transition-all">
+                                    <span className="material-symbols-outlined text-primary-container text-lg mr-2">event</span>
+                                    <input name="date" defaultValue={new Date().toLocaleDateString('en-CA')} required className="bg-transparent border-none text-sm text-on-surface-variant w-full focus:ring-0 p-0 font-label outline-none" type="date" />
+                                </div>
+                            </div>
+                            <div>
+                                <label className="font-label text-[10px] uppercase text-on-surface-variant mb-1 block">Time</label>
+                                <div className="bg-surface-container-lowest rounded-lg p-3 flex items-center border border-outline-variant/10 focus-within:border-primary-container/40 transition-all">
+                                    <span className="material-symbols-outlined text-primary-container text-lg mr-2">schedule</span>
+                                    <input name="time" defaultValue={new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })} required className="bg-transparent border-none text-sm text-on-surface-variant w-full focus:ring-0 p-0 font-label outline-none" type="time" />
+                                </div>
+                            </div>
+                        </div>
+                        <button type="submit" className="w-full bg-gradient-to-r from-primary-container to-primary py-3 rounded-lg font-headline font-extrabold text-on-primary-container hover:brightness-110 active:scale-95 transition-all mt-4 cursor-pointer">
                             CONFIRM RESERVATION
                         </button>
-                    </div>
+                    </form>
                 </div>
 
                 {/* Recent Activity Logs */}

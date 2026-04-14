@@ -1,0 +1,68 @@
+/** @type {import('tailwindcss').Config} */
+export default {
+  content: [
+    "./index.html",
+    "./src/**/*.{js,ts,jsx,tsx}",
+  ],
+  darkMode: "class",
+  theme: {
+    extend: {
+      colors: {
+        "on-secondary-fixed": "#111c2d",
+        "surface-container-high": "#222a3d",
+        "surface-container": "#171f33",
+        "background": "#0b1326",
+        "on-surface-variant": "#bac9cc",
+        "on-primary": "#00363d",
+        "surface-dim": "#0b1326",
+        "on-secondary-fixed-variant": "#3c475a",
+        "surface-variant": "#2d3449",
+        "secondary": "#bcc7de",
+        "error": "#ffb4ab",
+        "on-background": "#dae2fd",
+        "on-secondary": "#263143",
+        "surface-container-lowest": "#060e20",
+        "tertiary-fixed": "#c4e7ff",
+        "primary-fixed-dim": "#00daf3",
+        "on-error-container": "#ffdad6",
+        "surface": "#0b1326",
+        "tertiary-fixed-dim": "#7bd0ff",
+        "on-primary-fixed": "#001f24",
+        "on-primary-container": "#00626e",
+        "on-tertiary-fixed": "#001e2c",
+        "on-surface": "#dae2fd",
+        "on-tertiary": "#00354a",
+        "tertiary": "#dbf0ff",
+        "primary-fixed": "#9cf0ff",
+        "tertiary-container": "#99d9ff",
+        "on-secondary-container": "#aeb9d0",
+        "surface-container-low": "#131b2e",
+        "inverse-on-surface": "#283044",
+        "primary": "#c3f5ff",
+        "secondary-container": "#3e495d",
+        "secondary-fixed-dim": "#bcc7de",
+        "inverse-surface": "#dae2fd",
+        "outline-variant": "#3b494c",
+        "primary-container": "#00e5ff",
+        "on-primary-fixed-variant": "#004f58",
+        "on-tertiary-fixed-variant": "#004c69",
+        "on-error": "#690005",
+        "secondary-fixed": "#d8e3fb",
+        "surface-container-highest": "#2d3449",
+        "inverse-primary": "#006875",
+        "error-container": "#93000a",
+        "surface-bright": "#31394d",
+        "on-tertiary-container": "#006083",
+        "surface-tint": "#00daf3",
+        "outline": "#849396"
+      },
+      fontFamily: {
+        headline: ["Manrope", "sans-serif"],
+        body: ["Manrope", "sans-serif"],
+        label: ["Space Grotesk", "sans-serif"]
+      }
+    },
+  },
+  plugins: [],
+}
+

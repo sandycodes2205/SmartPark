@@ -15,6 +15,18 @@ import { useEffect } from 'react';
 import { db } from '../firebase';
 import { ref, get, update, push } from 'firebase/database';
 
+// Mirrors the same logic as Dashboard.tsx — keeps db/stats accurate from the watcher too
+async function syncStats(rawData: Record<string, any>) {
+    const allSlots = Object.values(rawData);
+    const active   = allSlots.filter((s: any) => s.isActive !== false);
+    await update(ref(db), {
+        'stats/total':    active.length,
+        'stats/free':     active.filter((s: any) => s.status === 'free' && !s.isReserved).length,
+        'stats/used':     active.filter((s: any) => s.status === 'occupied').length,
+        'stats/reserved': active.filter((s: any) => s.status === 'free' &&  s.isReserved).length,
+    });
+}
+
 export function useReservationWatcher() {
     useEffect(() => {
         const check = async () => {
@@ -51,6 +63,9 @@ export function useReservationWatcher() {
                         });
                     }
                     console.log(`[ReservationWatcher] Expired ${expired.length} reservation(s):`, expired);
+                    // Re-read the now-updated slots and push fresh stats to db/stats
+                    const freshSnap = await get(ref(db, 'slots'));
+                    if (freshSnap.exists()) syncStats(freshSnap.val()).catch(() => {});
                 }
             } catch (e) {
                 // Silently absorb transient network errors

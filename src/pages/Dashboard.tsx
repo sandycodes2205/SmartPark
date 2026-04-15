@@ -2,6 +2,29 @@ import { useState, useEffect, useRef } from 'react';
 import { db } from '../firebase';
 import { ref, onValue, update, push, get } from 'firebase/database';
 
+// ---------------------------------------------------------------------------
+// Helper: compute slot stats from raw Firebase slot data and persist to db/stats
+// ---------------------------------------------------------------------------
+function computeStats(rawData: Record<string, any>) {
+    const allSlots = Object.values(rawData);
+    const active = allSlots.filter((s: any) => s.isActive !== false);
+    const free     = active.filter((s: any) => s.status === 'free' && !s.isReserved).length;
+    const reserved = active.filter((s: any) => s.status === 'free' &&  s.isReserved).length;
+    const used     = active.filter((s: any) => s.status === 'occupied').length;
+    const total    = active.length;
+    return { total, free, used, reserved };
+}
+
+async function syncStats(rawData: Record<string, any>) {
+    const stats = computeStats(rawData);
+    await update(ref(db), {
+        'stats/total':    stats.total,
+        'stats/free':     stats.free,
+        'stats/used':     stats.used,
+        'stats/reserved': stats.reserved,
+    });
+}
+
 const Dashboard = () => {
     const [slots, setSlots] = useState<any[]>([
         { id: "A1", status: "free" },
@@ -83,6 +106,8 @@ const Dashboard = () => {
                 }));
                 formattedSlots.sort((a, b) => a.id.localeCompare(b.id));
                 setSlots(formattedSlots);
+                // Keep db/stats in sync whenever slots change
+                syncStats(data).catch(() => {});
             }
         });
 
@@ -139,6 +164,8 @@ const Dashboard = () => {
                         lastlog: data[key].lastlog,
                         reservedUntil: data[key].reservedUntil || null,
                     })));
+                    // Sync stats on every poll cycle
+                    syncStats(data).catch(() => {});
                 }
                 if (systemSnap.exists()) {
                     const data = systemSnap.val();
@@ -177,6 +204,9 @@ const Dashboard = () => {
             action: 'park_in',
             timestamp: Date.now()
         });
+        // Refresh stats after state change
+        const snap = await get(ref(db, 'slots'));
+        if (snap.exists()) syncStats(snap.val()).catch(() => {});
     };
 
     const handleRemoveCar = async () => {
@@ -194,6 +224,9 @@ const Dashboard = () => {
             action: 'park_out',
             timestamp: Date.now()
         });
+        // Refresh stats after state change
+        const snap = await get(ref(db, 'slots'));
+        if (snap.exists()) syncStats(snap.val()).catch(() => {});
     };
 
     const handleReserveSlot = async (e: React.FormEvent<HTMLFormElement>) => {
@@ -224,6 +257,9 @@ const Dashboard = () => {
             action: 'reserve',
             timestamp: Date.now()
         });
+        // Refresh stats after reservation
+        const snap = await get(ref(db, 'slots'));
+        if (snap.exists()) syncStats(snap.val()).catch(() => {});
         form.reset();
     };
 
